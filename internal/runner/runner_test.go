@@ -100,6 +100,32 @@ func TestRunQuarantinesRepoWritesAndCapturesDiff(t *testing.T) {
 	}
 }
 
+func TestRunCapturesNewFilesInDiff(t *testing.T) {
+	repo := writeRepo(t)
+	emit := filepath.Join(t.TempDir(), "new-file")
+
+	result, err := Run(context.Background(), Options{
+		Repo:       repo,
+		PolicyPath: writeRunnerPolicy(t),
+		Emit:       emit,
+		Command:    []string{"sh", "-c", "printf 'new file\n' > created.txt"},
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if result.ExitCode != 0 {
+		t.Fatalf("exit code = %d, want 0", result.ExitCode)
+	}
+
+	diff, err := os.ReadFile(filepath.Join(emit, "filesystem_diff.patch"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(diff), "diff --git a/created.txt b/created.txt") || !strings.Contains(string(diff), "+new file") {
+		t.Fatalf("new file was not captured in diff:\n%s", diff)
+	}
+}
+
 func TestRunBlocksDeniedCommandBeforeExecution(t *testing.T) {
 	repo := writeRepo(t)
 	emit := filepath.Join(t.TempDir(), "blocked")

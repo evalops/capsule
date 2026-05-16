@@ -337,7 +337,10 @@ func initWorkspaceBaseline(ctx context.Context, workspace string) error {
 }
 
 func finalizeRun(ctx context.Context, b *runbundle.Bundle, result *Result, stdout []byte, startedAt, finishedAt time.Time) error {
-	diff, err := gitOutput(ctx, b.Spec.Workspace, "diff", "--binary", "HEAD", "--", ".")
+	if err := gitRun(ctx, b.Spec.Workspace, "add", "-A"); err != nil {
+		return err
+	}
+	diff, err := gitOutput(ctx, b.Spec.Workspace, "diff", "--cached", "--binary", "HEAD", "--", ".")
 	if err != nil {
 		return err
 	}
@@ -380,6 +383,16 @@ func gitOutput(ctx context.Context, dir string, args ...string) ([]byte, error) 
 		return nil, err
 	}
 	return output, nil
+}
+
+func gitRun(ctx context.Context, dir string, args ...string) error {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git %s: %w\n%s", strings.Join(args, " "), err, output)
+	}
+	return nil
 }
 
 func changedFiles(status []byte) []string {
