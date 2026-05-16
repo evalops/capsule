@@ -90,6 +90,14 @@ func TestExecuteRunInspectDiffAndApply(t *testing.T) {
 	}
 
 	out.Reset()
+	if code := Execute([]string{"eval", runDir, "--suite", "coding-agent-safety"}, &out, &bytes.Buffer{}); code != 0 {
+		t.Fatalf("eval exit = %d", code)
+	}
+	if !strings.Contains(out.String(), "passed: true") {
+		t.Fatalf("eval output = %q", out.String())
+	}
+
+	out.Reset()
 	if code := Execute([]string{"apply", runDir, "--repo", repo, "--require", "clean-worktree", "--require", "tests-passed", "--require", "no-secret-diff"}, &out, &bytes.Buffer{}); code != 0 {
 		t.Fatalf("apply exit = %d", code)
 	}

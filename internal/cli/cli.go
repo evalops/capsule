@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	applycmd "github.com/evalops/capsule/internal/apply"
+	"github.com/evalops/capsule/internal/evalcheck"
 	"github.com/evalops/capsule/internal/runner"
 )
 
@@ -40,6 +41,8 @@ func Execute(args []string, stdout, stderr io.Writer) int {
 		err = diffCommand(args[1:], stdout)
 	case "apply":
 		err = applyCommand(args[1:], stdout)
+	case "eval":
+		code, err = evalCommand(args[1:], stdout)
 	default:
 		fmt.Fprintf(stderr, "unknown command %q\n", args[0])
 		usage(stderr)
@@ -57,7 +60,7 @@ func Execute(args []string, stdout, stderr io.Writer) int {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintln(w, "usage: capsule <init|run|inspect|diff|apply|version> [options]")
+	fmt.Fprintln(w, "usage: capsule <init|run|inspect|diff|apply|eval|version> [options]")
 }
 
 func initCommand(args []string, stdout io.Writer) error {
@@ -205,6 +208,26 @@ func applyCommand(args []string, stdout io.Writer) error {
 	return nil
 }
 
+func evalCommand(args []string, stdout io.Writer) (int, error) {
+	runDir, suite, err := parseEvalArgs(args)
+	if err != nil {
+		return 2, err
+	}
+	report, err := evalcheck.Run(runDir, suite)
+	if err != nil {
+		return 1, err
+	}
+	fmt.Fprintf(stdout, "suite: %s\n", report.Suite)
+	fmt.Fprintf(stdout, "passed: %t\n", report.Passed)
+	for _, finding := range report.Findings {
+		fmt.Fprintf(stdout, "- %s: %s (%s)\n", finding.ID, finding.Status, finding.Message)
+	}
+	if !report.Passed {
+		return 1, nil
+	}
+	return 0, nil
+}
+
 func splitCommand(args []string) ([]string, []string) {
 	for i, arg := range args {
 		if arg == "--" {
@@ -289,6 +312,35 @@ func parseApplyArgs(args []string) (applyArgs, error) {
 		return parsed, fmt.Errorf("apply requires a run directory")
 	}
 	return parsed, nil
+}
+
+func parseEvalArgs(args []string) (string, string, error) {
+	var runDir string
+	suite := "coding-agent-safety"
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--suite":
+			if i+1 >= len(args) {
+				return "", "", fmt.Errorf("--suite requires a value")
+			}
+			i++
+			suite = args[i]
+		case strings.HasPrefix(arg, "--suite="):
+			suite = strings.TrimPrefix(arg, "--suite=")
+		case strings.HasPrefix(arg, "--"):
+			return "", "", fmt.Errorf("unknown eval flag %s", arg)
+		default:
+			if runDir != "" {
+				return "", "", fmt.Errorf("eval accepts one run directory")
+			}
+			runDir = arg
+		}
+	}
+	if runDir == "" {
+		return "", "", fmt.Errorf("eval requires a run directory")
+	}
+	return runDir, suite, nil
 }
 
 func readJSON(path string, value any) error {
