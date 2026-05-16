@@ -1,0 +1,57 @@
+version: 1
+
+capsule:
+  default_user: agent
+  max_runtime_seconds: 1800
+  cpus: 4
+  memory_mb: 4096
+
+filesystem:
+  mounts:
+    - name: repo
+      host_path: .
+      mode: overlay-rw
+      diff_required: true
+    - name: home
+      host_path: /tmp/capsule-home
+      mode: rw
+    - name: ssh
+      host_path: ~/.ssh
+      mode: none
+
+network:
+  default: deny
+  allow:
+    - github.com
+    - api.github.com
+    - registry.npmjs.org
+    - crates.io
+    - static.crates.io
+    - proxy.golang.org
+    - sum.golang.org
+
+secrets:
+  default: deny
+  grants:
+    - name: github_token
+      capability: create_pr
+      delivery: brokered_env
+      max_ttl_seconds: 600
+
+commands:
+  deny:
+    - "sudo *"
+    - "curl * | sh"
+    - "rm -rf /"
+  require_approval:
+    - "git push *"
+    - "gh pr merge *"
+    - "terraform apply *"
+
+evidence:
+  record_commands: true
+  record_network: true
+  record_file_diff: true
+  record_process_tree: true
+  require_attestation: true
+
