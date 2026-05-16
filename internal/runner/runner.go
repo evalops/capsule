@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,6 +25,7 @@ const (
 	deniedExitCode   = 126
 	approvalExitCode = 125
 	commandErrorCode = 127
+	networkExitCode  = 97
 )
 
 type Options struct {
@@ -67,6 +69,15 @@ type commandRecord struct {
 	Command    []string  `json:"command"`
 	Action     string    `json:"action"`
 	ExitCode   int       `json:"exit_code"`
+}
+
+type networkRecord struct {
+	Time    time.Time     `json:"time"`
+	Host    string        `json:"host"`
+	Command []string      `json:"command"`
+	Action  policy.Action `json:"action"`
+	Rule    string        `json:"rule,omitempty"`
+	Reason  string        `json:"reason,omitempty"`
 }
 
 func Run(ctx context.Context, opts Options) (*Result, error) {
@@ -152,6 +163,16 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 			status = "approval_required"
 		}
 		result := &Result{BundlePath: b.Path, ExitCode: code, Status: status, Blocked: true, DiffPath: filepath.Join(b.Path, "filesystem_diff.patch")}
+		if err := finalizeRun(ctx, b, result, nil, now, now); err != nil {
+			return nil, err
+		}
+		return result, nil
+	}
+
+	if blocked, err := brokerNetwork(ctx, b, p, opts.Command, now); err != nil {
+		return nil, err
+	} else if blocked {
+		result := &Result{BundlePath: b.Path, ExitCode: networkExitCode, Status: "network_blocked", Blocked: true, DiffPath: filepath.Join(b.Path, "filesystem_diff.patch")}
 		if err := finalizeRun(ctx, b, result, nil, now, now); err != nil {
 			return nil, err
 		}
@@ -426,6 +447,81 @@ func snapshotProcesses(b *runbundle.Bundle, stage string, at time.Time) error {
 		return b.AppendJSONL("process_tree.jsonl", map[string]any{"time": at, "stage": stage, "error": err.Error()})
 	}
 	return b.AppendJSONL("process_tree.jsonl", map[string]any{"time": at, "stage": stage, "snapshot": string(output)})
+}
+
+func brokerNetwork(ctx context.Context, b *runbundle.Bundle, p *policy.Policy, command []string, at time.Time) (bool, error) {
+	_ = ctx
+	hosts := extractNetworkHosts(command)
+	blocked := false
+	for _, host := range hosts {
+		decision := p.DecideNetwork(host)
+		if err := b.AppendJSONL("policy_decisions.jsonl", policyRecord{
+			Time:    at,
+			Kind:    "network",
+			Subject: host,
+			Action:  decision.Action,
+			Rule:    decision.Rule,
+			Reason:  decision.Reason,
+		}); err != nil {
+			return false, err
+		}
+		if err := b.AppendJSONL("network.jsonl", networkRecord{
+			Time:    at,
+			Host:    host,
+			Command: command,
+			Action:  decision.Action,
+			Rule:    decision.Rule,
+			Reason:  decision.Reason,
+		}); err != nil {
+			return false, err
+		}
+		if decision.Action != policy.ActionAllow {
+			blocked = true
+		}
+	}
+	return blocked, nil
+}
+
+func extractNetworkHosts(command []string) []string {
+	if len(command) == 0 || !isNetworkTool(command[0]) {
+		return nil
+	}
+	seen := map[string]bool{}
+	var hosts []string
+	for _, arg := range command[1:] {
+		for _, host := range hostsFromArg(arg) {
+			if !seen[host] {
+				seen[host] = true
+				hosts = append(hosts, host)
+			}
+		}
+	}
+	return hosts
+}
+
+func isNetworkTool(command string) bool {
+	base := filepath.Base(command)
+	switch base {
+	case "curl", "wget", "git", "gh", "npm", "pnpm", "yarn", "go", "cargo":
+		return true
+	default:
+		return false
+	}
+}
+
+func hostsFromArg(arg string) []string {
+	var hosts []string
+	if parsed, err := url.Parse(arg); err == nil && parsed.Hostname() != "" {
+		hosts = append(hosts, parsed.Hostname())
+	}
+	if strings.HasPrefix(arg, "git@") {
+		if rest, ok := strings.CutPrefix(arg, "git@"); ok {
+			if host, _, ok := strings.Cut(rest, ":"); ok && host != "" {
+				hosts = append(hosts, host)
+			}
+		}
+	}
+	return hosts
 }
 
 func brokerSecrets(b *runbundle.Bundle, p *policy.Policy, requests []SecretRequest, env []string, at time.Time) ([]string, error) {

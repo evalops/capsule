@@ -133,3 +133,37 @@ func TestRunBlocksDeniedCommandBeforeExecution(t *testing.T) {
 		t.Fatalf("policy decision did not record deny:\n%s", decisions)
 	}
 }
+
+func TestRunBlocksDeniedNetworkDestinationBeforeExecution(t *testing.T) {
+	repo := writeRepo(t)
+	emit := filepath.Join(t.TempDir(), "network-blocked")
+
+	result, err := Run(context.Background(), Options{
+		Repo:       repo,
+		PolicyPath: writeRunnerPolicy(t),
+		Emit:       emit,
+		Command:    []string{"curl", "https://example.com/install.sh"},
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if result.ExitCode != 97 {
+		t.Fatalf("exit code = %d, want network denied code 97", result.ExitCode)
+	}
+
+	events, err := os.ReadFile(filepath.Join(emit, "network.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(events), `"host":"example.com"`) || !strings.Contains(string(events), `"action":"deny"`) {
+		t.Fatalf("network event did not record deny:\n%s", events)
+	}
+
+	commands, err := os.ReadFile(filepath.Join(emit, "commands.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(commands), `"action":"executed"`) {
+		t.Fatalf("denied network command should not execute:\n%s", commands)
+	}
+}
